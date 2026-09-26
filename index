@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Realtime Dashboard</title>
+    <!-- Chart.js สำหรับวาดกราฟ -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #f4f7f6;
+            padding: 20px;
+            color: #333;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+        .card-container {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            width: 250px;
+            text-align: center;
+            border-top: 5px solid #007bff;
+        }
+        .card.temp { border-color: #ff4d4d; }
+        .card.humi { border-color: #00bfff; }
+        .card.light { border-color: #ffcc00; }
+        .card h3 {
+            font-size: 1.1rem;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .card .value {
+            font-size: 2.2rem;
+            font-weight: bold;
+            color: #222;
+        }
+        .card .unit {
+            font-size: 0.9rem;
+            color: #888;
+        }
+        .chart-container {
+            background: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .timestamp {
+            text-align: center;
+            margin-top: 15px;
+            font-size: 0.85rem;
+            color: #777;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h2>ESP32 Realtime Dashboard</h2>
+        <p>โหนด: lab/esp32-01</p>
+    </div>
+
+    <!-- แสดงตัวเลขแบบ Realtime -->
+    <div class="card-container">
+        <div class="card temp">
+            <h3>อุณหภูมิ (Temperature)</h3>
+            <div class="value" id="val-temp">--</div>
+            <div class="unit">°C</div>
+        </div>
+        <div class="card humi">
+            <h3>ความชื้น (Humidity)</h3>
+            <div class="value" id="val-humi">--</div>
+            <div class="unit">%</div>
+        </div>
+        <div class="card light">
+            <h3>แสง (Light)</h3>
+            <div class="value" id="val-light">--</div>
+            <div class="unit">Lux / Raw</div>
+        </div>
+    </div>
+
+    <!-- แสดงกราฟ Realtime -->
+    <div class="chart-container">
+        <canvas id="realtimeChart"></canvas>
+        <div class="timestamp" id="last-update">อัปเดตล่าสุด: -</div>
+    </div>
+
+    <!-- Firebase App และ Realtime Database SDK (Modular v10) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        // 1. กำหนดค่า Configuration ของ Firebase
+        const firebaseConfig = {
+            databaseURL: "https://ios-001-2df1b-default-rtdb.asia-southeast1.firebasedatabase.app/"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const database = getDatabase(app);
+
+        // 2. ตั้งค่า Chart.js
+        const ctx = document.getElementById('realtimeChart').getContext('2d');
+        const maxDataPoints = 15; // จำนวนจุดข้อมูลสูงสุดบนกราฟ
+
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Temperature (°C)',
+                        data: [],
+                        borderColor: '#ff4d4d',
+                        backgroundColor: 'rgba(255, 77, 77, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    },
+                    {
+                        label: 'Humidity (%)',
+                        data: [],
+                        borderColor: '#00bfff',
+                        backgroundColor: 'rgba(0, 191, 255, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    },
+                    {
+                        label: 'Light',
+                        data: [],
+                        borderColor: '#ffcc00',
+                        backgroundColor: 'rgba(255, 204, 0, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { position: 'top' }
+                },
+                scales: {
+                    x: { title: { display: true, text: 'เวลา' } },
+                    y: { beginAtZero: false }
+                }
+            }
+        });
+
+        // 3. ฟังการเปลี่ยนแปลงข้อมูล Realtime จาก Firebase Path: lab/esp32-01/latest
+        const latestRef = ref(database, 'lab/esp32-01/latest');
+
+        onValue(latestRef, (snapshot) => {
+            const data = snapshot.val();
+            if (data) {
+                const temp = parseFloat(data.temp).toFixed(2);
+                const humi = parseFloat(data.humi).toFixed(2);
+                const light = parseFloat(data.light).toFixed(2);
+                
+                // แปลง Timestamp (หากเป็นวินาทีให้คูณ 1000)
+                const timeString = data.timestamp 
+                    ? new Date(data.timestamp * 1000).toLocaleTimeString('th-TH') 
+                    : new Date().toLocaleTimeString('th-TH');
+
+                // อัปเดตตัวเลขการ์ด
+                document.getElementById('val-temp').innerText = temp;
+                document.getElementById('val-humi').innerText = humi;
+                document.getElementById('val-light').innerText = light;
+                document.getElementById('last-update').innerText = `อัปเดตล่าสุด: ${timeString}`;
+
+                // อัปเดตกราฟ
+                if (chart.data.labels.length >= maxDataPoints) {
+                    chart.data.labels.shift();
+                    chart.data.datasets[0].data.shift();
+                    chart.data.datasets[1].data.shift();
+                    chart.data.datasets[2].data.shift();
+                }
+
+                chart.data.labels.push(timeString);
+                chart.data.datasets[0].data.push(temp);
+                chart.data.datasets[1].data.push(humi);
+                chart.data.datasets[2].data.push(light);
+
+                chart.update();
+            }
+        });
+    </script>
+</body>
+</html>
